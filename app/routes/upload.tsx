@@ -50,13 +50,22 @@ const Upload = () => {
             uploadedFile.path,
             prepareInstructions({ jobTitle, jobDescription })
         )
-        if (!feedback) return setStatusText('Error: Failed to analyze resume');
+        if (!feedback || !feedback.message) return setStatusText('Error: Failed to analyze resume');
 
-        const feedbackText = typeof feedback.message.content === 'string'
-            ? feedback.message.content
-            : feedback.message.content[0].text;
+        let feedbackText: string | undefined;
+        if (typeof feedback.message.content === 'string') {
+            feedbackText = feedback.message.content;
+        } else if (Array.isArray(feedback.message.content) && feedback.message.content[0] && (feedback.message.content[0] as any).text) {
+            feedbackText = (feedback.message.content[0] as any).text;
+        }
 
-        data.feedback = JSON.parse(feedbackText);
+        if (!feedbackText) return setStatusText('Error: Unexpected AI response');
+
+        try {
+            data.feedback = JSON.parse(feedbackText);
+        } catch (e) {
+            return setStatusText('Error: Failed to parse AI feedback');
+        }
         await kv.set(`resume:${uuid}`, JSON.stringify(data));
         setStatusText('Analysis complete, redirecting...');
         console.log(data);

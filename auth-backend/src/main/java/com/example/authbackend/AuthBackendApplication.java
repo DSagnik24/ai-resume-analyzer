@@ -9,10 +9,10 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 @SpringBootApplication
 public class AuthBackendApplication {
     /**
-     * Private constructor to prevent instantiation of utility class.
+     * Default constructor.
      */
-    private AuthBackendApplication() {
-        // Private constructor
+    public AuthBackendApplication() {
+        // Default constructor for Spring
     }
 
     /**

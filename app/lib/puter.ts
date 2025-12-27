@@ -1,7 +1,7 @@
 import { create } from "zustand";
 
 // API configuration
-const API_BASE_URL = process.env.REACT_APP_API_URL || "http://localhost:8080";
+const API_BASE_URL = process.env.REACT_APP_API_URL || "http://localhost:9000";
 
 interface PuterUser {
     id: string;
@@ -25,7 +25,7 @@ interface PuterChatOptions {
     [key: string]: unknown;
 }
 
-interface FSItem {
+interface SimpleFSItem {
     name: string;
     path: string;
     isDirectory: boolean;
@@ -37,10 +37,15 @@ interface KVItem {
     value: string;
 }
 
+interface AIMessage {
+    role?: string;
+    content?: string | ({ text?: string } & any)[] | any[];
+    [key: string]: any;
+}
+
 interface AIResponse {
-    message?: string;
-    text?: string;
-    [key: string]: unknown;
+    message?: AIMessage;
+    [key: string]: any;
 }
 
 interface PuterStore {
@@ -62,9 +67,9 @@ interface PuterStore {
             data: string | File | Blob
         ) => Promise<File | undefined>;
         read: (path: string) => Promise<Blob | undefined>;
-        upload: (file: File[] | Blob[]) => Promise<FSItem | undefined>;
+        upload: (file: File[] | Blob[]) => Promise<SimpleFSItem | undefined>;
         delete: (path: string) => Promise<void>;
-        readDir: (path: string) => Promise<FSItem[] | undefined>;
+        readDir: (path: string) => Promise<SimpleFSItem[] | undefined>;
     };
     ai: {
         chat: (
@@ -124,14 +129,10 @@ const apiRequest = async (
     options: RequestInit = {}
 ): Promise<Response> => {
     const token = getAuthToken();
-    const headers: HeadersInit = {
+    const headers: Record<string, string> = {
         "Content-Type": "application/json",
-        ...options.headers,
+        ...(options.headers as Record<string, string> | undefined),
     };
-
-    if (token) {
-        headers["Authorization"] = `Bearer ${token}`;
-    }
 
     return fetch(`${API_BASE_URL}${endpoint}`, {
         ...options,
@@ -221,15 +222,21 @@ export const usePuterStore = create<PuterStore>((set, get) => {
         set({ isLoading: true, error: null });
 
         try {
-            // In a real app, this would open a login dialog or redirect to login page
-            // For now, we'll assume the user is redirected to /auth and that endpoint handles it
-            const response = await apiRequest("/api/auth/login", {
-                method: "POST",
-                body: JSON.stringify({}),
+                // Prompt for credentials (simple inline flow for demo)
+            const username = window.prompt('Username');
+            const password = window.prompt('Password');
+            if (!username || !password) {
+                throw new Error('Sign in cancelled');
+            }
+
+            const response = await apiRequest('/api/auth/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username, password }),
             });
 
             if (!response.ok) {
-                throw new Error("Sign in failed");
+                throw new Error('Sign in failed: invalid credentials');
             }
 
             const data: AuthResponse = await response.json();
@@ -309,34 +316,71 @@ export const usePuterStore = create<PuterStore>((set, get) => {
     };
 
     const init = (): void => {
+        // Initialize the store without performing an automatic auth check.
+        // This prevents automatic sign-in on page load using any existing token.
         set({ puterReady: true });
-        checkAuthStatus();
     };
 
     // File system operations (placeholders for future backend implementation)
     const write = async (path: string, data: string | File | Blob) => {
-        setError("File system operations not yet implemented");
-        return;
+        // Not implemented: server-side write not yet supported
+        setError("File system write not implemented");
+        return undefined;
     };
 
     const readDir = async (path: string) => {
-        setError("File system operations not yet implemented");
-        return;
+        // Not implemented: server-side directory listing not yet supported
+        setError("File system list not implemented");
+        return undefined;
     };
 
     const readFile = async (path: string) => {
-        setError("File system operations not yet implemented");
-        return;
+        try {
+            const res = await fetch(`${API_BASE_URL}${path}`);
+            if (!res.ok) {
+                setError("Failed to read file");
+                return undefined;
+            }
+            const blob = await res.blob();
+            return blob;
+        } catch (err) {
+            setError(err instanceof Error ? err.message : "Failed to read file");
+            return undefined;
+        }
     };
 
     const upload = async (files: File[] | Blob[]) => {
-        setError("File system operations not yet implemented");
-        return;
+        try {
+            const form = new FormData();
+            form.append('file', files[0] as File);
+            const res = await fetch(`${API_BASE_URL}/api/files/upload`, {
+                method: 'POST',
+                body: form,
+            });
+            if (!res.ok) {
+                setError('Failed to upload file');
+                return undefined;
+            }
+            const json = await res.json();
+            return json; // expecting {name, path, size}
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'Failed to upload file');
+            return undefined;
+        }
     };
 
     const deleteFile = async (path: string) => {
-        setError("File system operations not yet implemented");
-        return;
+        try {
+            const res = await fetch(`${API_BASE_URL}${path}`, { method: 'DELETE' });
+            if (!res.ok) {
+                setError('Failed to delete file');
+                return;
+            }
+            return;
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'Failed to delete file');
+            return;
+        }
     };
 
     // AI operations (placeholders for future backend implementation)
@@ -347,43 +391,90 @@ export const usePuterStore = create<PuterStore>((set, get) => {
         options?: PuterChatOptions
     ) => {
         setError("AI operations not yet implemented");
-        return;
+        return undefined;
     };
 
     const feedback = async (path: string, message: string) => {
-        setError("AI operations not yet implemented");
-        return;
+        try {
+            const res = await fetch(`${API_BASE_URL}/api/ai/feedback?path=${encodeURIComponent(path)}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(message),
+            });
+            if (!res.ok) {
+                setError('AI feedback failed');
+                return undefined;
+            }
+            const json = await res.json();
+            // Our placeholder returns nested message.content; normalize to expected structure
+            // If message.content is a JSON string, parse it
+            if (json.message && json.message.content) {
+                let content = json.message.content;
+                if (typeof content === 'string') {
+                    try {
+                        content = JSON.parse(content);
+                    } catch (e) {
+                        // content is not JSON
+                    }
+                }
+                return { message: { content } as any } as AIResponse;
+            }
+            return json as AIResponse;
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'AI feedback failed');
+            return undefined;
+        }
     };
 
     const img2txt = async (image: string | File | Blob, testMode?: boolean) => {
-        setError("AI operations not yet implemented");
-        return;
+        setError("AI img2txt not implemented");
+        return undefined;
     };
 
-    // Key-value operations (placeholders for future backend implementation)
+    // Key-value operations (simple backend-backed implementation)
     const getKV = async (key: string) => {
-        setError("KV operations not yet implemented");
-        return;
+        try {
+            const res = await fetch(`${API_BASE_URL}/api/kv/${encodeURIComponent(key)}`);
+            if (!res.ok) return null;
+            return await res.text();
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'KV get failed');
+            return null;
+        }
     };
 
     const setKV = async (key: string, value: string) => {
-        setError("KV operations not yet implemented");
-        return;
+        try {
+            const res = await fetch(`${API_BASE_URL}/api/kv/${encodeURIComponent(key)}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: value,
+            });
+            return res.ok;
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'KV set failed');
+            return false;
+        }
     };
 
     const deleteKV = async (key: string) => {
-        setError("KV operations not yet implemented");
-        return;
+        try {
+            const res = await fetch(`${API_BASE_URL}/api/kv/${encodeURIComponent(key)}`, { method: 'DELETE' });
+            return res.ok;
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'KV delete failed');
+            return false;
+        }
     };
 
     const listKV = async (pattern: string, returnValues?: boolean) => {
-        setError("KV operations not yet implemented");
-        return;
+        setError('KV list not implemented');
+        return undefined;
     };
 
     const flushKV = async () => {
-        setError("KV operations not yet implemented");
-        return;
+        setError('KV flush not implemented');
+        return undefined;
     };
 
     return {

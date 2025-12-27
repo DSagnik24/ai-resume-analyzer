@@ -7,9 +7,11 @@ interface FileUploaderProps {
 }
 
 const FileUploader = ({ onFileSelect }: FileUploaderProps) => {
+    const [selectedFile, setSelectedFile] = useState<File | null>(null);
+
     const onDrop = useCallback((acceptedFiles: File[]) => {
         const file = acceptedFiles[0] || null;
-
+        setSelectedFile(file);
         onFileSelect?.(file);
     }, [onFileSelect]);
 
@@ -22,7 +24,7 @@ const FileUploader = ({ onFileSelect }: FileUploaderProps) => {
         maxSize: maxFileSize,
     })
 
-    const file = acceptedFiles[0] || null;
+    const file = selectedFile || acceptedFiles[0] || null;
 
 
 
@@ -46,6 +48,8 @@ const FileUploader = ({ onFileSelect }: FileUploaderProps) => {
                                 </div>
                             </div>
                             <button className="p-2 cursor-pointer" onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedFile(null);
                                 onFileSelect?.(null)
                             }}>
                                 <img src="/icons/cross.svg" alt="remove" className="w-4 h-4" />

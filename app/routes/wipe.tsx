@@ -5,11 +5,11 @@ import { usePuterStore } from "~/lib/puter";
 const WipeApp = () => {
     const { auth, isLoading, error, clearError, fs, ai, kv } = usePuterStore();
     const navigate = useNavigate();
-    const [files, setFiles] = useState<FSItem[]>([]);
+    const [files, setFiles] = useState<any[]>([]);
 
     const loadFiles = async () => {
-        const files = (await fs.readDir("./")) as FSItem[];
-        setFiles(files);
+        const read = await fs.readDir("./");
+        setFiles((read as any[]) || []);
     };
 
     useEffect(() => {
