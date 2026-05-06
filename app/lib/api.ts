@@ -1,4 +1,4 @@
-export const API_BASE = process.env.NODE_ENV === 'production' ? '' : 'http://localhost:8080';
+export const API_BASE = import.meta.env.MODE === 'production' ? '' : 'http://localhost:8080';
 
 const ACCESS_KEY = 'access_token';
 

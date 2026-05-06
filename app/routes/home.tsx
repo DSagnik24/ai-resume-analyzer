@@ -13,14 +13,14 @@ export function meta({}: Route.MetaArgs) {
 }
 
 export default function Home() {
-  const { auth, kv } = usePuterStore();
+  const { auth, isLoading, kv } = usePuterStore();
   const navigate = useNavigate();
   const [resumes, setResumes] = useState<Resume[]>([]);
   const [loadingResumes, setLoadingResumes] = useState(false);
 
   useEffect(() => {
-    if(!auth.isAuthenticated) navigate('/auth?next=/');
-  }, [auth.isAuthenticated])
+    if(!isLoading && !auth.isAuthenticated) navigate('/auth?next=/');
+  }, [auth.isAuthenticated, isLoading, navigate])
 
   useEffect(() => {
     const loadResumes = async () => {

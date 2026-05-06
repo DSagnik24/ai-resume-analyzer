@@ -1,7 +1,7 @@
 import { create } from "zustand";
 
 // API configuration
-const API_BASE_URL = process.env.REACT_APP_API_URL || "http://localhost:9000";
+const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:9000";
 
 interface PuterUser {
     id: string;
@@ -109,9 +109,12 @@ const getAuthToken = (): string | null => {
 };
 
 // Helper function to set auth token
-const setAuthToken = (token: string): void => {
+const setAuthToken = (token: string, refreshToken?: string): void => {
     if (typeof window !== "undefined") {
         localStorage.setItem("auth_token", token);
+        if (refreshToken) {
+            localStorage.setItem("refresh_token", refreshToken);
+        }
     }
 };
 
@@ -134,9 +137,14 @@ const apiRequest = async (
         ...(options.headers as Record<string, string> | undefined),
     };
 
+    if (token) {
+        headers.Authorization = `Bearer ${token}`;
+    }
+
     return fetch(`${API_BASE_URL}${endpoint}`, {
         ...options,
         headers,
+        credentials: "include",
     });
 };
 
@@ -178,38 +186,62 @@ export const usePuterStore = create<PuterStore>((set, get) => {
                 return false;
             }
 
-            const response = await apiRequest("/api/auth/me");
-            if (!response.ok) {
-                clearAuthToken();
+            // Check for demo auth first
+            const demoAuth = localStorage.getItem('demo_auth');
+            if (demoAuth && token.startsWith('demo_token_')) {
+                const user = JSON.parse(demoAuth) as PuterUser;
                 set({
                     auth: {
-                        user: null,
-                        isAuthenticated: false,
+                        user,
+                        isAuthenticated: true,
                         signIn: get().auth.signIn,
                         signOut: get().auth.signOut,
                         refreshUser: get().auth.refreshUser,
                         checkAuthStatus: get().auth.checkAuthStatus,
-                        getUser: () => null,
+                        getUser: () => user,
                     },
                     isLoading: false,
                 });
-                return false;
+                return true;
             }
 
-            const user: PuterUser = await response.json();
+            // Try API auth
+            try {
+                const response = await apiRequest("/api/auth/me");
+                if (response.ok) {
+                    const user: PuterUser = await response.json();
+                    set({
+                        auth: {
+                            user,
+                            isAuthenticated: true,
+                            signIn: get().auth.signIn,
+                            signOut: get().auth.signOut,
+                            refreshUser: get().auth.refreshUser,
+                            checkAuthStatus: get().auth.checkAuthStatus,
+                            getUser: () => user,
+                        },
+                        isLoading: false,
+                    });
+                    return true;
+                }
+            } catch (apiErr) {
+                console.warn('Auth API unavailable', apiErr);
+            }
+
+            clearAuthToken();
             set({
                 auth: {
-                    user,
-                    isAuthenticated: true,
+                    user: null,
+                    isAuthenticated: false,
                     signIn: get().auth.signIn,
                     signOut: get().auth.signOut,
                     refreshUser: get().auth.refreshUser,
                     checkAuthStatus: get().auth.checkAuthStatus,
-                    getUser: () => user,
+                    getUser: () => null,
                 },
                 isLoading: false,
             });
-            return true;
+            return false;
         } catch (err) {
             const msg =
                 err instanceof Error ? err.message : "Failed to check auth status";
@@ -222,35 +254,35 @@ export const usePuterStore = create<PuterStore>((set, get) => {
         set({ isLoading: true, error: null });
 
         try {
-                // Prompt for credentials (simple inline flow for demo)
-            const username = window.prompt('Username');
-            const password = window.prompt('Password');
-            if (!username || !password) {
-                throw new Error('Sign in cancelled');
+            const username = window.prompt("Enter username");
+            if (username === null) {
+                set({ isLoading: false });
+                return;
             }
+            const password = window.prompt("Enter password") || "resumind-demo";
 
-            const response = await apiRequest('/api/auth/login', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ username, password }),
+            const response = await apiRequest("/api/auth/login", {
+                method: "POST",
+                body: JSON.stringify({ username: username || "demo-user", password }),
             });
 
             if (!response.ok) {
-                throw new Error('Sign in failed: invalid credentials');
+                throw new Error("Sign in failed");
             }
 
-            const data: AuthResponse = await response.json();
-            setAuthToken(data.accessToken);
+            const body = (await response.json()) as AuthResponse;
+            setAuthToken(body.accessToken, body.refreshToken);
+            localStorage.removeItem("demo_auth");
 
             set({
                 auth: {
-                    user: data.user,
+                    user: body.user,
                     isAuthenticated: true,
                     signIn: get().auth.signIn,
                     signOut: get().auth.signOut,
                     refreshUser: get().auth.refreshUser,
                     checkAuthStatus: get().auth.checkAuthStatus,
-                    getUser: () => data.user,
+                    getUser: () => body.user,
                 },
                 isLoading: false,
             });
@@ -264,11 +296,18 @@ export const usePuterStore = create<PuterStore>((set, get) => {
         set({ isLoading: true, error: null });
 
         try {
-            await apiRequest("/api/auth/logout", {
-                method: "POST",
-            });
+            // Try API logout (may fail if no backend)
+            try {
+                await apiRequest("/api/auth/logout", {
+                    method: "POST",
+                });
+            } catch (apiErr) {
+                console.warn('Auth API unavailable for logout', apiErr);
+            }
 
             clearAuthToken();
+            localStorage.removeItem('demo_auth');
+            
             set({
                 auth: {
                     user: null,
@@ -291,24 +330,50 @@ export const usePuterStore = create<PuterStore>((set, get) => {
         set({ isLoading: true, error: null });
 
         try {
-            const response = await apiRequest("/api/auth/me");
-            if (!response.ok) {
-                throw new Error("Failed to refresh user");
+            // Check for demo auth first
+            const demoAuth = localStorage.getItem('demo_auth');
+            const token = getAuthToken();
+            if (demoAuth && token?.startsWith('demo_token_')) {
+                const user = JSON.parse(demoAuth) as PuterUser;
+                set({
+                    auth: {
+                        user,
+                        isAuthenticated: true,
+                        signIn: get().auth.signIn,
+                        signOut: get().auth.signOut,
+                        refreshUser: get().auth.refreshUser,
+                        checkAuthStatus: get().auth.checkAuthStatus,
+                        getUser: () => user,
+                    },
+                    isLoading: false,
+                });
+                return;
             }
 
-            const user: PuterUser = await response.json();
-            set({
-                auth: {
-                    user,
-                    isAuthenticated: true,
-                    signIn: get().auth.signIn,
-                    signOut: get().auth.signOut,
-                    refreshUser: get().auth.refreshUser,
-                    checkAuthStatus: get().auth.checkAuthStatus,
-                    getUser: () => user,
-                },
-                isLoading: false,
-            });
+            // Try API refresh
+            try {
+                const response = await apiRequest("/api/auth/me");
+                if (response.ok) {
+                    const user: PuterUser = await response.json();
+                    set({
+                        auth: {
+                            user,
+                            isAuthenticated: true,
+                            signIn: get().auth.signIn,
+                            signOut: get().auth.signOut,
+                            refreshUser: get().auth.refreshUser,
+                            checkAuthStatus: get().auth.checkAuthStatus,
+                            getUser: () => user,
+                        },
+                        isLoading: false,
+                    });
+                    return;
+                }
+            } catch (apiErr) {
+                console.warn('Auth API unavailable for refresh', apiErr);
+            }
+
+            throw new Error("Failed to refresh user");
         } catch (err) {
             const msg = err instanceof Error ? err.message : "Failed to refresh user";
             setError(msg);
@@ -316,9 +381,8 @@ export const usePuterStore = create<PuterStore>((set, get) => {
     };
 
     const init = (): void => {
-        // Initialize the store without performing an automatic auth check.
-        // This prevents automatic sign-in on page load using any existing token.
         set({ puterReady: true });
+        void checkAuthStatus();
     };
 
     // File system operations (placeholders for future backend implementation)
@@ -329,20 +393,43 @@ export const usePuterStore = create<PuterStore>((set, get) => {
     };
 
     const readDir = async (path: string) => {
-        // Not implemented: server-side directory listing not yet supported
-        setError("File system list not implemented");
-        return undefined;
+        try {
+            const res = await fetch(`${API_BASE_URL}/api/files`);
+            if (!res.ok) return undefined;
+            return await res.json();
+        } catch (err) {
+            setError(err instanceof Error ? err.message : "File system list failed");
+            return undefined;
+        }
     };
 
     const readFile = async (path: string) => {
         try {
-            const res = await fetch(`${API_BASE_URL}${path}`);
-            if (!res.ok) {
-                setError("Failed to read file");
-                return undefined;
+            try {
+                const res = await fetch(`${API_BASE_URL}${path}`);
+                if (res.ok) {
+                    const blob = await res.blob();
+                    return blob;
+                }
+            } catch (apiErr) {
+                console.warn('Puter API unavailable, checking localStorage', apiErr);
             }
-            const blob = await res.blob();
-            return blob;
+            
+            // Fallback: try to read from localStorage
+            const fileId = path.split('/').pop();
+            if (fileId) {
+                const fileData = localStorage.getItem(fileId);
+                if (fileData) {
+                    const parsed = JSON.parse(fileData);
+                    // Convert base64 back to blob
+                    const response = await fetch(parsed.data);
+                    const blob = await response.blob();
+                    return blob;
+                }
+            }
+            
+            setError("Failed to read file");
+            return undefined;
         } catch (err) {
             setError(err instanceof Error ? err.message : "Failed to read file");
             return undefined;
@@ -351,18 +438,43 @@ export const usePuterStore = create<PuterStore>((set, get) => {
 
     const upload = async (files: File[] | Blob[]) => {
         try {
+            const file = files[0] as File;
             const form = new FormData();
-            form.append('file', files[0] as File);
-            const res = await fetch(`${API_BASE_URL}/api/files/upload`, {
-                method: 'POST',
-                body: form,
-            });
-            if (!res.ok) {
-                setError('Failed to upload file');
-                return undefined;
+            form.append('file', file);
+            
+            try {
+                const res = await fetch(`${API_BASE_URL}/api/files/upload`, {
+                    method: 'POST',
+                    body: form,
+                });
+                if (res.ok) {
+                    const json = await res.json();
+                    return json; // expecting {name, path, size}
+                }
+            } catch (apiErr) {
+                // API not available, use localStorage fallback
+                console.warn('Puter API unavailable, using localStorage fallback', apiErr);
             }
-            const json = await res.json();
-            return json; // expecting {name, path, size}
+            
+            // Fallback: store file in localStorage for demo/testing
+            const reader = new FileReader();
+            return new Promise((resolve) => {
+                reader.onload = (e) => {
+                    const base64 = e.target?.result as string;
+                    const fileId = `file_${Date.now()}`;
+                    const fileData = {
+                        name: file.name,
+                        path: `/resumind/${fileId}`,
+                        size: file.size,
+                        type: file.type,
+                        data: base64, // base64 encoded file data
+                    };
+                    localStorage.setItem(fileId, JSON.stringify(fileData));
+                    console.log('File stored in localStorage (demo mode):', fileData.name);
+                    resolve(fileData);
+                };
+                reader.readAsDataURL(file);
+            });
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Failed to upload file');
             return undefined;
@@ -405,21 +517,7 @@ export const usePuterStore = create<PuterStore>((set, get) => {
                 setError('AI feedback failed');
                 return undefined;
             }
-            const json = await res.json();
-            // Our placeholder returns nested message.content; normalize to expected structure
-            // If message.content is a JSON string, parse it
-            if (json.message && json.message.content) {
-                let content = json.message.content;
-                if (typeof content === 'string') {
-                    try {
-                        content = JSON.parse(content);
-                    } catch (e) {
-                        // content is not JSON
-                    }
-                }
-                return { message: { content } as any } as AIResponse;
-            }
-            return json as AIResponse;
+            return (await res.json()) as AIResponse;
         } catch (err) {
             setError(err instanceof Error ? err.message : 'AI feedback failed');
             return undefined;
@@ -468,13 +566,28 @@ export const usePuterStore = create<PuterStore>((set, get) => {
     };
 
     const listKV = async (pattern: string, returnValues?: boolean) => {
-        setError('KV list not implemented');
-        return undefined;
+        try {
+            const params = new URLSearchParams({
+                pattern,
+                returnValues: String(returnValues ?? false),
+            });
+            const res = await fetch(`${API_BASE_URL}/api/kv?${params.toString()}`);
+            if (!res.ok) return undefined;
+            return await res.json();
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'KV list failed');
+            return undefined;
+        }
     };
 
     const flushKV = async () => {
-        setError('KV flush not implemented');
-        return undefined;
+        try {
+            const res = await fetch(`${API_BASE_URL}/api/kv`, { method: 'DELETE' });
+            return res.ok;
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'KV flush failed');
+            return false;
+        }
     };
 
     return {

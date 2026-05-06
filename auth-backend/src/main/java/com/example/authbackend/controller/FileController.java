@@ -15,7 +15,10 @@ import java.net.MalformedURLException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Stream;
 
 /**
  * Controller for file upload and serving.
@@ -35,6 +38,10 @@ public class FileController {
     @PostMapping("/upload")
     public ResponseEntity<?> upload(@RequestParam("file") MultipartFile file) {
         try {
+            if (file.isEmpty()) {
+                return ResponseEntity.badRequest().body(Map.of("error", "Uploaded file is empty"));
+            }
+
             final String original = StringUtils.cleanPath(file.getOriginalFilename());
             final String ext = original.contains(".") ? original.substring(original.lastIndexOf('.')) : "";
             final String filename = UUID.randomUUID().toString() + ext;
@@ -43,7 +50,7 @@ public class FileController {
             Files.copy(file.getInputStream(), target);
 
             final String publicPath = "/api/files/" + filename;
-            return ResponseEntity.ok().body(java.util.Map.of(
+            return ResponseEntity.ok().body(Map.of(
                 "name", original,
                 "path", publicPath,
                 "size", file.getSize()
@@ -53,10 +60,40 @@ public class FileController {
         }
     }
 
+    @GetMapping
+    public ResponseEntity<List<Map<String, Object>>> listFiles() {
+        try (Stream<Path> files = Files.list(uploadDir)) {
+            final List<Map<String, Object>> items = files
+                .filter(Files::isRegularFile)
+                .sorted()
+                .map(file -> {
+                    try {
+                        return Map.<String, Object>of(
+                            "name", file.getFileName().toString(),
+                            "path", "/api/files/" + file.getFileName(),
+                            "isDirectory", false,
+                            "size", Files.size(file)
+                        );
+                    } catch (final IOException e) {
+                        return Map.<String, Object>of(
+                            "name", file.getFileName().toString(),
+                            "path", "/api/files/" + file.getFileName(),
+                            "isDirectory", false
+                        );
+                    }
+                })
+                .toList();
+
+            return ResponseEntity.ok(items);
+        } catch (final IOException e) {
+            return ResponseEntity.status(500).build();
+        }
+    }
+
     @GetMapping("/{filename:.+}")
     public ResponseEntity<Resource> serveFile(@PathVariable String filename) {
         try {
-            final Path file = uploadDir.resolve(filename).normalize();
+            final Path file = resolveUploadPath(filename);
             final Resource resource = new UrlResource(file.toUri());
             if (!resource.exists()) {
                 return ResponseEntity.notFound().build();
@@ -71,5 +108,27 @@ public class FileController {
         } catch (final IOException e) {
             return ResponseEntity.status(500).build();
         }
+    }
+
+    @DeleteMapping("/{filename:.+}")
+    public ResponseEntity<Void> deleteFile(@PathVariable String filename) {
+        try {
+            final Path file = resolveUploadPath(filename);
+            if (!Files.deleteIfExists(file)) {
+                return ResponseEntity.notFound().build();
+            }
+
+            return ResponseEntity.ok().build();
+        } catch (final IOException e) {
+            return ResponseEntity.status(500).build();
+        }
+    }
+
+    private Path resolveUploadPath(final String filename) throws IOException {
+        final Path file = uploadDir.resolve(StringUtils.cleanPath(filename)).normalize();
+        if (!file.startsWith(uploadDir)) {
+            throw new IOException("Invalid file path");
+        }
+        return file;
     }
 }

@@ -1,4 +1,4 @@
-import {type FormEvent, useState} from 'react'
+import {type FormEvent, useEffect, useState} from 'react'
 import Navbar from "~/components/Navbar";
 import FileUploader from "~/components/FileUploader";
 import {usePuterStore} from "~/lib/puter";
@@ -13,6 +13,10 @@ const Upload = () => {
     const [isProcessing, setIsProcessing] = useState(false);
     const [statusText, setStatusText] = useState('');
     const [file, setFile] = useState<File | null>(null);
+
+    useEffect(() => {
+        if(!isLoading && !auth.isAuthenticated) navigate('/auth?next=/upload');
+    }, [auth.isAuthenticated, isLoading, navigate]);
 
     const handleFileSelect = (file: File | null) => {
         setFile(file)
@@ -52,17 +56,20 @@ const Upload = () => {
         )
         if (!feedback || !feedback.message) return setStatusText('Error: Failed to analyze resume');
 
+        let parsedFeedback: Feedback | undefined;
         let feedbackText: string | undefined;
         if (typeof feedback.message.content === 'string') {
             feedbackText = feedback.message.content;
         } else if (Array.isArray(feedback.message.content) && feedback.message.content[0] && (feedback.message.content[0] as any).text) {
             feedbackText = (feedback.message.content[0] as any).text;
+        } else if (typeof feedback.message.content === 'object') {
+            parsedFeedback = feedback.message.content as unknown as Feedback;
         }
 
-        if (!feedbackText) return setStatusText('Error: Unexpected AI response');
+        if (!feedbackText && !parsedFeedback) return setStatusText('Error: Unexpected AI response');
 
         try {
-            data.feedback = JSON.parse(feedbackText);
+            data.feedback = parsedFeedback || JSON.parse(feedbackText as string);
         } catch (e) {
             return setStatusText('Error: Failed to parse AI feedback');
         }
